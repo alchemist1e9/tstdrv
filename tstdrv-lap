@@ -1,0 +1,6 @@
+#!/bin/bash
+
+now=$(date +%s)
+mkdir -p /.tstdrv/ref/var/lib/tstdrv/${now}
+rsync -ar --no-specials --no-devices /.tstdrv/{chg,wrk} /.tstdrv/ref/var/lib/tstdrv/${now}/
+

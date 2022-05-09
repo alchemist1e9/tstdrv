@@ -1,0 +1,6 @@
+
+- add comment/description to begin/lap
+- implement tstdrv-ls
+- option to use ram for no trace/logging
+
+

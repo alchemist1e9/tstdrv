@@ -1,0 +1,44 @@
+#!/bin/bash
+
+systemctl stop user.slice
+egrep '^/dev/loop' /proc/mounts | cut -f1 -d' ' | xargs -L1 umount
+umount -R /run/snapd/ns
+umount /sys/fs/fuse/connections
+systemctl stop systemd-timesyncd 
+systemctl stop systemd-udevd
+
+modprobe overlay
+
+mkdir -p /.tstdrv
+egrep -qs '\s/\.tstdrv\s' /proc/mounts
+if [[ $? -eq 0 ]]
+then
+  echo 'ERROR: existing /.tstdrv in progress!!! cleanup first!'
+  exit 1
+fi
+
+#mount -t tmpfs -o size=8G tmpfs /.tstdrv
+when=$(date +%s)
+mkdir -p /var/lib/tstdrv/$when
+mount --bind /var/lib/tstdrv/${when} /.tstdrv
+mount --make-private /.tstdrv
+
+mkdir -p /.tstdrv/{ref,chg,wrk}
+mount --bind / /.tstdrv/ref
+mount --make-private /.tstdrv/ref
+
+mkdir -p /.tstdrv/chg/{boot,usr,snap,opt,etc,var,srv,tmp,home,root}
+for fs in $(ls -1d /.tstdrv/chg/* | xargs -L1 basename)
+do
+  egrep -qs "\s/${fs}\s" /proc/mounts
+  if [[ $? -eq 0 ]]
+  then
+    mount --bind /${fs} /.tstdrv/ref/${fs}
+  fi
+  mkdir -p /.tstdrv/wrk/${fs}
+  mount -t overlay -o lowerdir=/.tstdrv/ref/${fs},upperdir=/.tstdrv/chg/${fs},workdir=/.tstdrv/wrk/${fs} overlay /${fs}
+done
+chmod 1777 /tmp
+
+echo 'Test drive ready, run: $> systemctl isolate graphical.target'
+
