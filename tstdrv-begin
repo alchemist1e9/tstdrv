@@ -1,15 +1,5 @@
 #!/bin/bash
 
-systemctl stop user.slice
-egrep '^/dev/loop' /proc/mounts | cut -f1 -d' ' | xargs -L1 umount
-umount -R /run/snapd/ns
-umount /sys/fs/fuse/connections
-systemctl stop systemd-timesyncd 
-systemctl stop systemd-udevd
-
-modprobe overlay
-
-mkdir -p /.tstdrv
 egrep -qs '\s/\.tstdrv\s' /proc/mounts
 if [[ $? -eq 0 ]]
 then
@@ -17,26 +7,66 @@ then
   exit 1
 fi
 
-#mount -t tmpfs -o size=8G tmpfs /.tstdrv
+systemctl stop user.slice
+systcmctl stop snapd
+egrep '^/dev/loop' /proc/mounts | cut -f1 -d' ' | xargs -L1 umount
+umount -R /run/snapd/ns
+umount /sys/fs/fuse/connections
+systemctl stop systemd-timesyncd 
+systemctl stop systemd-udevd
+systemctl stop systemd-journald
+
+modprobe overlay
+modprobe nbd max_part=8
+
 when=$(date +%s)
-mkdir -p /var/lib/tstdrv/$when
-mount --bind /var/lib/tstdrv/${when} /.tstdrv
-mount --make-private /.tstdrv
+
+mkdir -p /var/lib/tstdrv
+mkdir -p /.TSTDRV
+mount --bind /var/lib/tstdrv /.TSTDRV
+mount --make-private /.TSTDRV
+qemu-img create /.TSTDRV/${when}.qcow2 -f qcow2 -o cluster_size=2M 32G
+qemu-nbd --connect=/dev/nbd7 /.TSTDRV/${when}.qcow2 
+sleep 10
+sync
+fdisk -l /dev/nbd7
+sync
+sleep 5
+mkfs.ext4 /dev/nbd7
+mkdir -p /.tstdrv
+mount /dev/nbd7 /.tstdrv
 
 mkdir -p /.tstdrv/{ref,chg,wrk}
-mount --bind / /.tstdrv/ref
-mount --make-private /.tstdrv/ref
+mkdir /.tstdrv/ref/rootfs
+mount --bind / /.tstdrv/ref/rootfs
+mount --make-private /.tstdrv/ref/rootfs
 
-mkdir -p /.tstdrv/chg/{boot,usr,snap,opt,etc,var,srv,tmp,home,root}
+mkdir -p /.tstdrv/chg/{usr,snap,opt,etc,var,srv,tmp,home,root}
 for fs in $(ls -1d /.tstdrv/chg/* | xargs -L1 basename)
 do
-  egrep -qs "\s/${fs}\s" /proc/mounts
-  if [[ $? -eq 0 ]]
-  then
-    mount --bind /${fs} /.tstdrv/ref/${fs}
-  fi
+  mkdir -p /.tstdrv/ref/${fs}
+  mount --bind /${fs} /.tstdrv/ref/${fs}
+  mount --make-private /.tstdrv/ref/${fs}
+  
+  mnts=$(egrep  "\s/${fs}/" /proc/mounts | awk '{print $2}' | perl -ne '@d=split(/\//,$_);print "$#d $_";'|sort -n | awk '{print $2}')
+  for m in $mnts
+  do 
+    pp=$(echo $m | sed 's/\///'); pp=$(echo $pp | sed 's/\//_-_/g');
+    mkdir -p /.tstdrv/ref/$pp
+    mount --bind ${m} /.tstdrv/ref/$pp
+    mount --make-private /.tstdrv/ref/$pp
+  done
+  mkdir -p /.tstdrv/chg/${fs}
   mkdir -p /.tstdrv/wrk/${fs}
   mount -t overlay -o lowerdir=/.tstdrv/ref/${fs},upperdir=/.tstdrv/chg/${fs},workdir=/.tstdrv/wrk/${fs} overlay /${fs}
+  for m in $mnts
+  do
+    mkdir -p $m
+    pp=$(echo $m | sed 's/\///'); pp=$(echo $pp | sed 's/\//_-_/g');
+    mkdir -p /.tstdrv/wrk/${pp}
+    mkdir -p /.tstdrv/chg/${pp}
+    mount -t overlay -o lowerdir=/.tstdrv/ref/${pp},upperdir=/.tstdrv/chg/${pp},workdir=/.tstdrv/wrk/${pp} overlay ${m}
+  done
 done
 chmod 1777 /tmp
 
